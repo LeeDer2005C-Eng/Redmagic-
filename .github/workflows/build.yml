@@ -1,0 +1,324 @@
+name: Build Single-File APK
+
+on:
+  push:
+    branches: [ "main", "master" ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Generate Android Project Structure & Source Code
+        run: |
+          mkdir -p app/src/main/java/com/redmagic/astra2stretcher
+
+          cat << 'EOF' > settings.gradle.kts
+          pluginManagement {
+              repositories {
+                  google()
+                  mavenCentral()
+                  gradlePluginPortal()
+              }
+          }
+          dependencyResolutionManagement {
+              repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+          }
+          rootProject.name = "Astra2Stretcher"
+          include(":app")
+          EOF
+
+          cat << 'EOF' > build.gradle.kts
+          plugins {
+              id("com.android.application") version "8.2.2" apply false
+              id("org.jetbrains.kotlin.android") version "1.9.22" apply false
+          }
+          EOF
+
+          cat << 'EOF' > gradle.properties
+          org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8
+          android.useAndroidX=true
+          android.nonTransitiveRClass=true
+          EOF
+
+          cat << 'EOF' > app/build.gradle.kts
+          plugins {
+              id("com.android.application")
+              id("org.jetbrains.kotlin.android")
+          }
+
+          android {
+              namespace = "com.redmagic.astra2stretcher"
+              compileSdk = 34
+
+              defaultConfig {
+                  applicationId = "com.redmagic.astra2stretcher"
+                  minSdk = 26
+                  targetSdk = 34
+                  versionCode = 1
+                  versionName = "1.0"
+              }
+
+              buildTypes {
+                  release {
+                      isMinifyEnabled = false
+                  }
+              }
+              compileOptions {
+                  sourceCompatibility = JavaVersion.VERSION_17
+                  targetCompatibility = JavaVersion.VERSION_17
+              }
+              kotlinOptions {
+                  jvmTarget = "17"
+              }
+              buildFeatures {
+                  compose = true
+              }
+              composeOptions {
+                  kotlinCompilerExtensionVersion = "1.5.8"
+              }
+          }
+
+          dependencies {
+              val composeBom = platform("androidx.compose:compose-bom:2024.02.00")
+              implementation(composeBom)
+              implementation("androidx.core:core-ktx:1.12.0")
+              implementation("androidx.activity:activity-compose:1.8.2")
+              implementation("androidx.compose.ui:ui")
+              implementation("androidx.compose.material3:material3")
+              implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
+          }
+          EOF
+
+          cat << 'EOF' > app/src/main/AndroidManifest.xml
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+              <application
+                  android:allowBackup="true"
+                  android:label="Astra 2 Stretcher"
+                  android:supportsRtl="true"
+                  android:theme="@android:style/Theme.Material.NoActionBar">
+                  <activity
+                      android:name=".MainActivity"
+                      android:exported="true">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                      </intent-filter>
+                  </activity>
+              </application>
+          </manifest>
+          EOF
+
+          cat << 'EOF' > app/src/main/java/com/redmagic/astra2stretcher/MainActivity.kt
+          package com.redmagic.astra2stretcher
+
+          import android.graphics.Bitmap
+          import android.graphics.BitmapFactory
+          import android.graphics.Color
+          import android.net.Uri
+          import android.os.Bundle
+          import androidx.activity.ComponentActivity
+          import androidx.activity.compose.rememberLauncherForActivityResult
+          import androidx.activity.compose.setContent
+          import androidx.activity.result.contract.ActivityResultContracts
+          import androidx.compose.foundation.Image
+          import androidx.compose.foundation.background
+          import androidx.compose.foundation.horizontalScroll
+          import androidx.compose.foundation.layout.*
+          import androidx.compose.foundation.rememberScrollState
+          import androidx.compose.foundation.verticalScroll
+          import androidx.compose.material3.*
+          import androidx.compose.runtime.*
+          import androidx.compose.ui.Alignment
+          import androidx.compose.ui.Modifier
+          import androidx.compose.ui.graphics.FilterQuality
+          import androidx.compose.ui.graphics.asImageBitmap
+          import androidx.compose.ui.layout.ContentScale
+          import androidx.compose.ui.platform.LocalContext
+          import androidx.compose.ui.unit.dp
+          import kotlinx.coroutines.Dispatchers
+          import kotlinx.coroutines.launch
+          import kotlinx.coroutines.withContext
+          import kotlin.math.PI
+          import kotlin.math.abs
+          import kotlin.math.floor
+          import kotlin.math.sin
+
+          class MainActivity : ComponentActivity() {
+              override fun onCreate(savedInstanceState: Bundle?) {
+                  super.onCreate(savedInstanceState)
+                  setContent {
+                      MaterialTheme(colorScheme = darkColorScheme()) {
+                          Surface(
+                              modifier = Modifier.fillMaxSize(),
+                              color = MaterialTheme.colorScheme.background
+                          ) {
+                              AstraImageStretcherScreen()
+                          }
+                      }
+                  }
+              }
+          }
+
+          @Composable
+          fun AstraImageStretcherScreen() {
+              val context = LocalContext.current
+              val scope = rememberCoroutineScope()
+
+              var originalBitmap by remember { mutableStateOf<Bitmap?>(null) }
+              var processedBitmap by remember { mutableStateOf<Bitmap?>(null) }
+              var isProcessing by remember { mutableStateOf(false) }
+              var useContentAware by remember { mutableStateOf(true) }
+              var stretchBothAxes by remember { mutableStateOf(true) }
+
+              val imagePicker = rememberLauncherForActivityResult(
+                  contract = ActivityResultContracts.GetContent()
+              ) { uri: Uri? ->
+                  uri?.let {
+                      context.contentResolver.openInputStream(it)?.use { stream ->
+                          val bmp = BitmapFactory.decodeStream(stream)
+                          originalBitmap = bmp
+                          processedBitmap = null
+                      }
+                  }
+              }
+
+              Column(
+                  modifier = Modifier
+                      .fillMaxSize()
+                      .padding(16.dp),
+                  horizontalAlignment = Alignment.CenterHorizontally
+              ) {
+                  Text(
+                      text = "RedMagic Astra 2 - Kéo Dãn +30px Không Mờ",
+                      style = MaterialTheme.typography.titleLarge,
+                      color = MaterialTheme.colorScheme.primary
+                  )
+
+                  Spacer(modifier = Modifier.height(12.dp))
+
+                  Row(
+                      modifier = Modifier.fillMaxWidth(),
+                      horizontalArrangement = Arrangement.SpaceEvenly,
+                      verticalAlignment = Alignment.CenterVertically
+                  ) {
+                      Button(onClick = { imagePicker.launch("image/*") }) {
+                          Text("Chọn Ảnh")
+                      }
+
+                      Button(
+                          enabled = originalBitmap != null && !isProcessing,
+                          onClick = {
+                              originalBitmap?.let { src ->
+                                  isProcessing = true
+                                  scope.launch {
+                                      val addW = 30
+                                      val addH = if (stretchBothAxes) 30 else 0
+                                      processedBitmap = withContext(Dispatchers.Default) {
+                                          if (useContentAware) {
+                                              ImageStretchEngine.stretchContentAware(src, addW, addH)
+                                          } else {
+                                              ImageStretchEngine.stretchLanczosSharp(src, addW, addH)
+                                          }
+                                      }
+                                      isProcessing = false
+                                  }
+                              }
+                          }
+                      ) {
+                          Text(if (isProcessing) "Đang xử lý..." else "Kéo dãn +30px")
+                      }
+                  }
+
+                  Spacer(modifier = Modifier.height(8.dp))
+
+                  Row(
+                      modifier = Modifier.fillMaxWidth(),
+                      horizontalArrangement = Arrangement.SpaceBetween,
+                      verticalAlignment = Alignment.CenterVertically
+                  ) {
+                      Row(verticalAlignment = Alignment.CenterVertically) {
+                          Checkbox(
+                              checked = useContentAware,
+                              onCheckedChange = { useContentAware = it }
+                          )
+                          Text("Content-Aware (Seam)")
+                      }
+
+                      Row(verticalAlignment = Alignment.CenterVertically) {
+                          Checkbox(
+                              checked = stretchBothAxes,
+                              onCheckedChange = { stretchBothAxes = it }
+                          )
+                          Text("Ngang & Dọc (+30x30)")
+                      }
+                  }
+
+                  Spacer(modifier = Modifier.height(8.dp))
+
+                  val displayBmp = processedBitmap ?: originalBitmap
+                  if (displayBmp != null) {
+                      Text(
+                          text = "Gốc: ${originalBitmap?.width}x${originalBitmap?.height} px | " +
+                                  "Hiện tại: ${displayBmp.width}x${displayBmp.height} px",
+                          style = MaterialTheme.typography.bodyMedium
+                      )
+
+                      Spacer(modifier = Modifier.height(8.dp))
+
+                      Box(
+                          modifier = Modifier
+                              .fillMaxSize()
+                              .background(MaterialTheme.colorScheme.surfaceVariant)
+                              .horizontalScroll(rememberScrollState())
+                              .verticalScroll(rememberScrollState()),
+                          contentAlignment = Alignment.Center
+                      ) {
+                          Image(
+                              bitmap = displayBmp.asImageBitmap(),
+                              contentDescription = "Stretched Image",
+                              contentScale = ContentScale.None,
+                              filterQuality = FilterQuality.None
+                          )
+                      }
+                  }
+              }
+          }
+
+          object ImageStretchEngine {
+
+              fun stretchContentAware(src: Bitmap, addWidth: Int, addHeight: Int): Bitmap {
+                  var current = src
+                  if (addWidth > 0) {
+                      current = expandWidthBySeams(current, addWidth)
+                  }
+                  if (addHeight > 0) {
+                      val rotated = rotateBitmap90(current, true)
+                      val expanded = expandWidthBySeams(rotated, addHeight)
+                      current = rotateBitmap90(expanded, false)
+                  }
+                  return current
+              }
+
+              private fun expandWidthBySeams(src: Bitmap, k: Int): Bitmap {
+                  val w = src.width
+                  val h = src.height
+                  val safeK = k.coerceAtMost(w - 1)
+                  val pixels = IntArray(w * h)
+                  src.getPixels(pixels, 0, w, 0, 0, w, h)
+
+                  val colEnergy = LongArray(w) { x ->
+                      var sum = 0L
+                      for (y in 0 until h) {
+                          val left = pixels[y * w + (x - 1).coerceAtLeast(0)]
+                          val right = pixels[y * w + (x + 1).coerceAtMost(w - 1)]
+                          val dr = abs(Color.red(right) - Color.red(left))
+                          val dg = abs(Color.green(right) - Color.green(left))
+                          val db = abs(Color.blue(right) - Color.blue(left))
+                          sum += (dr + dg + db
